@@ -21,10 +21,12 @@ const verifySignature = ({
     .digest("hex");
   const trusted = Buffer.from(`sha256=${payloadSignature}`, "ascii");
   const untrusted = Buffer.from(signature, "ascii");
+  if (trusted.length !== untrusted.length) return false;
   return crypto.timingSafeEqual(trusted, untrusted);
 };
 
-router.post("/webhook", async (req: Request, res: Response) => {
+router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
+  try {
   console.log("[delegation] webhook received headers:", req.headers);
   console.log("[delegation] webhook body:", JSON.stringify(req.body, null, 2));
 
@@ -61,6 +63,10 @@ router.post("/webhook", async (req: Request, res: Response) => {
   console.log("[delegation] delegation event data:", JSON.stringify(data, null, 2));
 
   res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("[delegation] webhook error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 export default router;
