@@ -35,7 +35,11 @@ const decryptHybrid = (encrypted: {
   const privateKey = process.env.DYNAMIC_PRIVATE_KEY_PEM!.replace(/\\n/g, "\n");
 
   const aesKey = crypto.privateDecrypt(
-    { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING },
+    {
+      key: privateKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256",
+    },
     Buffer.from(encrypted.ek, "base64")
   );
 
