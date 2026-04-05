@@ -299,9 +299,9 @@ export class Trader {
       log("SWAP", "No approval needed — router already has sufficient allowance");
     }
 
-    // Step 2: get quote — CLASSIC forces standard AMM routing (no UniswapX auction)
+    // Step 2: get quote — FASTEST gives optimal AMM routing
     const slippage = order.slippage_tolerance ? Number(order.slippage_tolerance) : 0.5;
-    log("SWAP", `[Step 2/4] Fetching Uniswap quote — tokenIn: ${tokenIn}, tokenOut: ${tokenOut}, amount: ${amountWei.toString()}, slippage: ${slippage}%, routing: CLASSIC`);
+    log("SWAP", `[Step 2/4] Fetching Uniswap quote — tokenIn: ${tokenIn}, tokenOut: ${tokenOut}, amount: ${amountWei.toString()}, slippage: ${slippage}%, routing: FASTEST`);
     const quoteRes = await this.uniswapFetch<
       Record<string, unknown> & {
         permitData?: Record<string, unknown> | null;
@@ -321,7 +321,7 @@ export class Trader {
         amount: amountWei.toString(),
         type: "EXACT_INPUT",
         slippageTolerance: slippage,
-        routingPreference: "CLASSIC",
+        routingPreference: "FASTEST",
       }),
     });
     log("SWAP", "Quote received successfully");
