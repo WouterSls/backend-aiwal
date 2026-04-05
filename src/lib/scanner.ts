@@ -261,26 +261,25 @@ export class Trader {
     );
     log("SWAP", `Parsed amount in wei: ${amountWei.toString()}`);
 
-    // Step 1: check if the router has sufficient token allowance
-    log("SWAP", `[Step 1/4] Checking token approval — wallet: ${this.walletAddress}, token: ${tokenIn}, amount: ${amountWei.toString()}`);
-    const approvalRes = await this.uniswapFetch<{
-      approval?: {
-        to: string;
-        data: string;
-        value: string;
-        chainId: number;
-        gasLimit: string;
-      };
-    }>(`${UNISWAP_API}/check_approval`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        walletAddress: this.walletAddress,
-        token: tokenIn,
-        amount: amountWei.toString(),
-        chainId: BASE_CHAIN_ID,
-      }),
-    });
+    // Step 1: check if the router has sufficient token allowance (skip for native ETH)
+    const isNativeIn = tokenIn.toLowerCase() === NATIVE_ETH_ADDRESS.toLowerCase();
+    let approvalRes: { approval?: { to: string; data: string; value: string; chainId: number; gasLimit: string } } = {};
+
+    if (isNativeIn) {
+      log("SWAP", "[Step 1/4] Native ETH — skipping approval check");
+    } else {
+      log("SWAP", `[Step 1/4] Checking token approval — wallet: ${this.walletAddress}, token: ${tokenIn}, amount: ${amountWei.toString()}`);
+      approvalRes = await this.uniswapFetch<typeof approvalRes>(`${UNISWAP_API}/check_approval`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          walletAddress: this.walletAddress,
+          token: tokenIn,
+          amount: amountWei.toString(),
+          chainId: BASE_CHAIN_ID,
+        }),
+      });
+    }
 
     if (approvalRes.approval) {
       log("SWAP", "Approval required — signing and broadcasting approval transaction...");
