@@ -13,12 +13,21 @@ import { db } from "./db/db";
 import { orders, proposals, users } from "./db/schema";
 import type { Order, Proposal, User } from "./db/schema";
 import { OrderType, OrderStatus } from "./types";
+import tokenList from "../../resources/8453-tokens.json";
 
 const UNISWAP_API = "https://trade-api.gateway.uniswap.org/v1";
 const BASE_CHAIN_ID = 8453;
 
 // Sentinel address used by some protocols to represent native ETH
 const NATIVE_ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
+// Token registry built from resources/8453-tokens.json — keyed by lowercase symbol
+const BASE_TOKENS: Record<string, { address: string; decimals: number }> =
+  Object.fromEntries(
+    (tokenList.tokens as { symbol: string; address: string; decimals: number }[]).map(
+      (t) => [t.symbol.toLowerCase(), { address: t.address, decimals: t.decimals }],
+    ),
+  );
 
 // Buffer multiplier for gas estimates (120% of simulated gas)
 const GAS_BUFFER_NUMERATOR = 12n;
@@ -361,9 +370,14 @@ export class Trader {
     return lower === "eth" || lower === NATIVE_ETH_ADDRESS.toLowerCase();
   }
 
-  /** Resolves a token symbol like "ETH" to its contract address for Uniswap API calls */
+  /** Resolves a token symbol like "ETH" or "USDC" to its contract address for Uniswap API calls */
   private resolveTokenAddress(token: string): string {
     if (this.isNativeToken(token)) return NATIVE_ETH_ADDRESS;
+    const entry = BASE_TOKENS[token.toLowerCase()];
+    if (entry) return entry.address;
+    if (!ethers.isAddress(token)) {
+      throw new Error(`Unknown token "${token}" — not found in 8453-tokens.json and not a valid address`);
+    }
     return token;
   }
 
@@ -379,15 +393,19 @@ export class Trader {
       log("PARSE_AMOUNT", `Native ETH — parsing ${amount} ETH as wei (18 decimals)`);
       return ethers.parseEther(amount);
     }
-    log("PARSE_AMOUNT", `ERC-20 token ${token} — fetching decimals on-chain...`);
-    const contract = new ethers.Contract(
-      token!,
-      ERC20_INTERFACE,
-      this.provider,
-    );
-    // ethers v6 returns bigint from contract calls; Number() is safe for decimals (≤18)
-    const decimals = Number(await contract.decimals());
-    log("PARSE_AMOUNT", `Token decimals: ${decimals} — parsing ${amount} with ${decimals} decimals`);
+    const resolvedAddress = this.resolveTokenAddress(token!);
+    const knownEntry = BASE_TOKENS[token!.toLowerCase()];
+    let decimals: number;
+    if (knownEntry) {
+      decimals = knownEntry.decimals;
+      log("PARSE_AMOUNT", `ERC-20 token ${token} — using decimals from registry: ${decimals}`);
+    } else {
+      log("PARSE_AMOUNT", `ERC-20 token ${token} — fetching decimals on-chain...`);
+      const contract = new ethers.Contract(resolvedAddress, ERC20_INTERFACE, this.provider);
+      // ethers v6 returns bigint from contract calls; Number() is safe for decimals (≤18)
+      decimals = Number(await contract.decimals());
+      log("PARSE_AMOUNT", `Token decimals: ${decimals} — parsing ${amount} with ${decimals} decimals`);
+    }
     return ethers.parseUnits(amount, decimals);
   }
 
