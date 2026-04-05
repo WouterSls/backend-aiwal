@@ -481,8 +481,16 @@ export class Trader {
 
     this.assertFeeData(feeData);
 
-    const buffered = this.bufferedGas(BigInt(unsignedTx.gasLimit));
-    log("SIGN_BROADCAST", `Gas — Uniswap limit: ${unsignedTx.gasLimit}, buffered (120%): ${buffered.toString()}`);
+    const gasEstimate = unsignedTx.gasLimit != null
+      ? BigInt(unsignedTx.gasLimit)
+      : await this.provider.estimateGas({
+          to: unsignedTx.to,
+          data: unsignedTx.data,
+          value: BigInt(unsignedTx.value),
+          from: this.walletAddress,
+        });
+    const buffered = this.bufferedGas(gasEstimate);
+    log("SIGN_BROADCAST", `Gas — Uniswap limit: ${unsignedTx.gasLimit ?? "not provided, estimated: " + gasEstimate.toString()}, buffered (120%): ${buffered.toString()}`);
 
     const tx = {
       to: unsignedTx.to as `0x${string}`,
