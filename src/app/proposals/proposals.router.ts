@@ -11,6 +11,7 @@ import {
 import { validateProposalRequestDto } from "./utils";
 import { db } from "../../lib/db/db";
 import { OrderStatus, ProposalStatus } from "../../lib/types";
+import { Scanner } from "../../lib/scanner";
 
 const router = Router();
 
@@ -99,6 +100,7 @@ router.post("/", async (req, res) => {
   }));
 
   db.insert(orders).values(newOrders).run();
+  Scanner.getInstance().notify();
 
   const frontendUrl = process.env.FRONTEND_URL;
   if (!frontendUrl) {

@@ -8,8 +8,11 @@ import type {
   DelegatedEvmWalletClient,
   ServerKeyShare,
 } from "@dynamic-labs-wallet/node-evm";
-import type { Order, Proposal } from "./db/schema";
-import { OrderType } from "./types";
+import { eq, and, ne } from "drizzle-orm";
+import { db } from "./db/db";
+import { orders, proposals, users } from "./db/schema";
+import type { Order, Proposal, User } from "./db/schema";
+import { OrderType, OrderStatus } from "./types";
 
 const UNISWAP_API = "https://trade-api.gateway.uniswap.org/v1";
 const BASE_CHAIN_ID = 8453;
@@ -446,6 +449,14 @@ export class Trader {
     return this.signAndBroadcast(tx);
   }
 
+  /** Wait for a transaction receipt; resolves null on timeout */
+  async waitForTransaction(
+    txHash: string,
+    timeoutMs = 120_000,
+  ): Promise<ethers.TransactionReceipt | null> {
+    return this.provider.waitForTransaction(txHash, 1, timeoutMs);
+  }
+
   /** Sign a transaction with delegated MPC and broadcast it via ethers */
   private async signAndBroadcast(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -464,3 +475,194 @@ export class Trader {
     return txResponse.hash;
   }
 }
+
+// ── Scanner ───────────────────────────────────────────────────────────────────
+
+const SCAN_INTERVAL_MS = 10_000;
+const MAX_RETRIES = 3;
+
+const scanLog = (tag: string, msg: string, data?: unknown) => {
+  const ts = new Date().toISOString();
+  if (data !== undefined) {
+    console.log(`[${ts}] [SCANNER] [${tag}] ${msg}`, data);
+  } else {
+    console.log(`[${ts}] [SCANNER] [${tag}] ${msg}`);
+  }
+};
+
+export class Scanner {
+  private static instance: Scanner | null = null;
+  private scanning = false;
+  private intervalId: NodeJS.Timeout | null = null;
+
+  private constructor() {}
+
+  static getInstance(): Scanner {
+    if (!Scanner.instance) {
+      Scanner.instance = new Scanner();
+    }
+    return Scanner.instance;
+  }
+
+  start(): void {
+    scanLog("START", "Scanner starting — polling every 10s");
+    this.runScan();
+    this.intervalId = setInterval(() => this.runScan(), SCAN_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    scanLog("STOP", "Scanner stopped");
+  }
+
+  /** Trigger an immediate scan — call this when new orders are created */
+  notify(): void {
+    scanLog("NOTIFY", "Immediate scan triggered by new order(s)");
+    this.runScan();
+  }
+
+  private runScan(): void {
+    if (this.scanning) {
+      scanLog("SCAN", "Scan already in progress — skipping");
+      return;
+    }
+    this.processPendingOrders().catch((err) => {
+      scanLog("SCAN", "Unhandled error in scan loop", err);
+      this.scanning = false;
+    });
+  }
+
+  private async processPendingOrders(): Promise<void> {
+    this.scanning = true;
+    try {
+      const rows = db
+        .select({ order: orders, proposal: proposals, user: users })
+        .from(orders)
+        .innerJoin(proposals, eq(orders.proposal_id, proposals.id))
+        .innerJoin(users, eq(proposals.wallet_address, users.wallet_address))
+        .where(
+          and(
+            eq(orders.status, OrderStatus.Pending),
+            ne(orders.type, OrderType.LimitOrder),
+          ),
+        )
+        .all();
+
+      if (rows.length === 0) {
+        scanLog("SCAN", "No pending orders");
+        return;
+      }
+
+      scanLog("SCAN", `Found ${rows.length} pending order(s)`);
+
+      for (const { order, proposal, user } of rows) {
+        await this.processOrder(order, proposal, user);
+      }
+    } finally {
+      this.scanning = false;
+    }
+  }
+
+  private async processOrder(
+    order: Order,
+    proposal: Proposal,
+    user: User,
+  ): Promise<void> {
+    scanLog("ORDER", `Processing order ${order.id} (type: ${order.type})`);
+
+    if (!user.dynamic_wallet_id || !user.delegated_share || !user.wallet_api_key) {
+      scanLog(
+        "ORDER",
+        `Skipping order ${order.id} — user ${user.wallet_address} missing delegation credentials`,
+      );
+      return;
+    }
+
+    let keyShare: ServerKeyShare;
+    try {
+      keyShare = JSON.parse(user.delegated_share);
+    } catch {
+      scanLog(
+        "ORDER",
+        `Skipping order ${order.id} — failed to parse delegated_share for ${user.wallet_address}`,
+      );
+      return;
+    }
+
+    const trader = new Trader({
+      walletId: user.dynamic_wallet_id,
+      walletApiKey: user.wallet_api_key,
+      keyShare,
+      walletAddress: user.wallet_address,
+    });
+
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        scanLog("ORDER", `Order ${order.id} — attempt ${attempt}/${MAX_RETRIES}`);
+        const txHash = await trader.executeOrder(order, proposal);
+        scanLog("ORDER", `Order ${order.id} broadcast — tx hash: ${txHash}`);
+
+        db.update(orders)
+          .set({
+            status: OrderStatus.Submitted,
+            confirmation_hash: txHash,
+            updated_at: new Date().toISOString(),
+          })
+          .where(eq(orders.id, order.id))
+          .run();
+
+        // Watch for on-chain confirmation in the background (non-blocking)
+        this.watchReceipt(order.id, txHash, trader);
+        return;
+      } catch (err) {
+        lastError = err;
+        scanLog("ORDER", `Order ${order.id} attempt ${attempt} failed`, err);
+        if (attempt < MAX_RETRIES) {
+          await sleep(2_000 * attempt);
+        }
+      }
+    }
+
+    scanLog("ORDER", `Order ${order.id} failed after ${MAX_RETRIES} attempts`, lastError);
+    db.update(orders)
+      .set({ status: OrderStatus.Failed, updated_at: new Date().toISOString() })
+      .where(eq(orders.id, order.id))
+      .run();
+  }
+
+  private watchReceipt(orderId: string, txHash: string, trader: Trader): void {
+    trader
+      .waitForTransaction(txHash)
+      .then((receipt) => {
+        if (!receipt || receipt.status !== 1) {
+          scanLog(
+            "RECEIPT",
+            `Order ${orderId} reverted on-chain — hash: ${txHash}, status: ${receipt?.status ?? "timeout"}`,
+          );
+          db.update(orders)
+            .set({ status: OrderStatus.Failed, updated_at: new Date().toISOString() })
+            .where(eq(orders.id, orderId))
+            .run();
+        } else {
+          scanLog(
+            "RECEIPT",
+            `Order ${orderId} confirmed — block: ${receipt.blockNumber}, hash: ${txHash}`,
+          );
+          db.update(orders)
+            .set({ status: OrderStatus.Completed, updated_at: new Date().toISOString() })
+            .where(eq(orders.id, orderId))
+            .run();
+        }
+      })
+      .catch((err) => {
+        scanLog("RECEIPT", `Order ${orderId} receipt watch error — leaving as submitted`, err);
+      });
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
