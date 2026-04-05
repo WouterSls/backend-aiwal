@@ -212,6 +212,9 @@ export class Trader {
   private async executeSwap(order: Order, proposal: Proposal): Promise<string> {
     log("SWAP", `Starting swap — ${proposal.token_in} → ${proposal.token_out}`);
 
+    const tokenIn = this.resolveTokenAddress(proposal.token_in);
+    const tokenOut = this.resolveTokenAddress(proposal.token_out);
+
     const headers = {
       "Content-Type": "application/json",
       "x-api-key": process.env.UNISWAP_API_KEY!,
@@ -222,12 +225,12 @@ export class Trader {
     log("SWAP", `Parsing token amount: ${order.amount_in}...`);
     const amountWei = await this.parseTokenAmount(
       order.amount_in,
-      proposal.token_in,
+      tokenIn,
     );
     log("SWAP", `Parsed amount in wei: ${amountWei.toString()}`);
 
     // Step 1: check if the router has sufficient token allowance
-    log("SWAP", `[Step 1/4] Checking token approval — wallet: ${this.walletAddress}, token: ${proposal.token_in}, amount: ${amountWei.toString()}`);
+    log("SWAP", `[Step 1/4] Checking token approval — wallet: ${this.walletAddress}, token: ${tokenIn}, amount: ${amountWei.toString()}`);
     const approvalRes = await this.uniswapFetch<{
       approval?: {
         to: string;
@@ -241,7 +244,7 @@ export class Trader {
       headers,
       body: JSON.stringify({
         walletAddress: this.walletAddress,
-        token: proposal.token_in,
+        token: tokenIn,
         amount: amountWei.toString(),
         chainId: BASE_CHAIN_ID,
       }),
@@ -266,7 +269,7 @@ export class Trader {
 
     // Step 2: get quote — CLASSIC forces standard AMM routing (no UniswapX auction)
     const slippage = order.slippage_tolerance ? Number(order.slippage_tolerance) : 0.5;
-    log("SWAP", `[Step 2/4] Fetching Uniswap quote — tokenIn: ${proposal.token_in}, tokenOut: ${proposal.token_out}, amount: ${amountWei.toString()}, slippage: ${slippage}%, routing: CLASSIC`);
+    log("SWAP", `[Step 2/4] Fetching Uniswap quote — tokenIn: ${tokenIn}, tokenOut: ${tokenOut}, amount: ${amountWei.toString()}, slippage: ${slippage}%, routing: CLASSIC`);
     const quoteRes = await this.uniswapFetch<
       Record<string, unknown> & {
         permitData?: Record<string, unknown> | null;
@@ -279,8 +282,8 @@ export class Trader {
       headers,
       body: JSON.stringify({
         swapper: this.walletAddress,
-        tokenIn: proposal.token_in,
-        tokenOut: proposal.token_out,
+        tokenIn: tokenIn,
+        tokenOut: tokenOut,
         tokenInChainId: String(BASE_CHAIN_ID),
         tokenOutChainId: String(BASE_CHAIN_ID),
         amount: amountWei.toString(),
@@ -356,6 +359,12 @@ export class Trader {
     if (!token) return true;
     const lower = token.toLowerCase();
     return lower === "eth" || lower === NATIVE_ETH_ADDRESS.toLowerCase();
+  }
+
+  /** Resolves a token symbol like "ETH" to its contract address for Uniswap API calls */
+  private resolveTokenAddress(token: string): string {
+    if (this.isNativeToken(token)) return NATIVE_ETH_ADDRESS;
+    return token;
   }
 
   /**
