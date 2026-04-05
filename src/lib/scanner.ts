@@ -65,6 +65,29 @@ export class Trader {
   };
   private walletAddress: string;
 
+  // Token bucket: Uniswap API allows 3 requests per second
+  private uniswapRateLimiter = (() => {
+    const RATE = 3;       // max requests per second
+    const INTERVAL = 1000; // ms
+    let tokens = RATE;
+    let lastRefill = Date.now();
+    return async () => {
+      while (true) {
+        const now = Date.now();
+        const elapsed = now - lastRefill;
+        if (elapsed >= INTERVAL) {
+          tokens = RATE;
+          lastRefill = now;
+        }
+        if (tokens > 0) {
+          tokens--;
+          return;
+        }
+        await new Promise((r) => setTimeout(r, INTERVAL - elapsed));
+      }
+    };
+  })();
+
   constructor({
     walletId,
     walletApiKey,
@@ -429,6 +452,7 @@ export class Trader {
 
   /** Fetches from the Uniswap API and throws on non-2xx responses */
   private async uniswapFetch<T>(url: string, init: RequestInit): Promise<T> {
+    await this.uniswapRateLimiter();
     log("UNISWAP_FETCH", `→ ${init.method ?? "GET"} ${url}`);
     const res = await fetch(url, init);
     log("UNISWAP_FETCH", `← ${res.status} ${res.statusText} from ${url}`);
