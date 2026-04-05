@@ -38,7 +38,7 @@ router.get("/", (req, res) => {
   const foundProposals = db
     .select()
     .from(proposals)
-    .where(eq(proposals.wallet_address, walletAddress as string))
+    .where(eq(proposals.wallet_address, (walletAddress as string).toLowerCase()))
     .all();
 
   if (foundProposals.length === 0) {
@@ -76,7 +76,7 @@ router.post("/", async (req, res) => {
 
   const newProposal: NewProposal = {
     id: proposalId,
-    wallet_address,
+    wallet_address: wallet_address.toLowerCase(),
     title,
     reasoning,
     token_in,
