@@ -17,7 +17,7 @@ router.get("/", (req, res) => {
   const user = db
     .select()
     .from(users)
-    .where(eq(users.wallet_address, walletAddress))
+    .where(eq(users.wallet_address, walletAddress.toLowerCase()))
     .limit(1)
     .get();
 
@@ -40,7 +40,7 @@ router.post("/", (req, res) => {
 
   const user = db
     .insert(users)
-    .values({ wallet_address: walletAddress, preset })
+    .values({ wallet_address: walletAddress.toLowerCase(), preset })
     .returning()
     .get();
 

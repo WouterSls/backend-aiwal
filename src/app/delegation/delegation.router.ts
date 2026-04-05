@@ -90,16 +90,19 @@ router.post("/webhook", async (req: Request, res: Response): Promise<void> => {
     const decryptedShare = decryptHybrid(data.encryptedDelegatedShare);
     const decryptedApiKey = decryptHybrid(data.encryptedWalletApiKey);
 
-    await db
+    const publicKey = data.publicKey?.toLowerCase();
+    console.log("[delegation] updating user with publicKey:", publicKey);
+
+    const result = await db
       .update(users)
       .set({
         dynamic_wallet_id: data.walletId,
         delegated_share: decryptedShare,
         wallet_api_key: decryptedApiKey,
       })
-      .where(eq(users.wallet_address, data.publicKey));
+      .where(eq(users.wallet_address, publicKey));
 
-    console.log("[delegation] stored delegation for wallet:", data.walletId);
+    console.log("[delegation] stored delegation for wallet:", data.walletId, "rows affected:", result.changes);
 
     res.status(200).json({ received: true });
   } catch (err) {
