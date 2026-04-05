@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@dynamic-labs-wallet/node": "^0.0.322",
+    "@dynamic-labs-wallet/node-evm": "^0.0.322",
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.0",
     "drizzle-orm": "^0.30.10",
+    "ethers": "^6.16.0",
     "express": "^4.19.2",
     "zod": "^3.23.8"
   },
