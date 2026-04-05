@@ -338,10 +338,19 @@ export class Trader {
 
     if (permitData) {
       log("SWAP", "Permit2 data present — signing typed data with delegated MPC wallet...");
+      // Uniswap's permitData uses { domain, types, values } but viem signTypedData
+      // requires { domain, types, primaryType, message }. Derive primaryType from
+      // the types keys (excluding EIP712Domain) and remap values → message.
+      const { domain, types, values } = permitData as {
+        domain: unknown;
+        types: Record<string, unknown>;
+        values: unknown;
+      };
+      const primaryType = Object.keys(types).find((k) => k !== "EIP712Domain")!;
       const permit2Sig = await delegatedSignTypedData(this.delegatedClient, {
         ...this.credentials,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        typedData: permitData as any,
+        typedData: { domain, types, primaryType, message: values } as any,
       });
       log("SWAP", `Permit2 signature obtained (first 10 chars): ${permit2Sig.slice(0, 10)}...`);
       swapBody.signature = permit2Sig;
